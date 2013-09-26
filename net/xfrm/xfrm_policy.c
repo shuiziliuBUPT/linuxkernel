@@ -320,10 +320,8 @@ static void xfrm_queue_purge(struct sk_buff_head *list)
 {
 	struct sk_buff *skb;
 
-	while ((skb = skb_dequeue(list)) != NULL) {
-		dev_put(skb->dev);
+	while ((skb = skb_dequeue(list)) != NULL)
 		kfree_skb(skb);
-	}
 }
 
 /* Rule must be locked. Release descentant resources, announce
@@ -1037,6 +1035,24 @@ __xfrm_policy_lookup(struct net *net, const struct flowi *fl, u16 family, u8 dir
 	return xfrm_policy_lookup_bytype(net, XFRM_POLICY_TYPE_MAIN, fl, family, dir);
 }
 
+static int flow_to_policy_dir(int dir)
+{
+	if (XFRM_POLICY_IN == FLOW_DIR_IN &&
+	    XFRM_POLICY_OUT == FLOW_DIR_OUT &&
+	    XFRM_POLICY_FWD == FLOW_DIR_FWD)
+		return dir;
+
+	switch (dir) {
+	default:
+	case FLOW_DIR_IN:
+		return XFRM_POLICY_IN;
+	case FLOW_DIR_OUT:
+		return XFRM_POLICY_OUT;
+	case FLOW_DIR_FWD:
+		return XFRM_POLICY_FWD;
+	}
+}
+
 static struct flow_cache_object *
 xfrm_policy_lookup(struct net *net, const struct flowi *fl, u16 family,
 		   u8 dir, struct flow_cache_object *old_obj, void *ctx)
@@ -1046,7 +1062,7 @@ xfrm_policy_lookup(struct net *net, const struct flowi *fl, u16 family,
 	if (old_obj)
 		xfrm_pol_put(container_of(old_obj, struct xfrm_policy, flo));
 
-	pol = __xfrm_policy_lookup(net, fl, family, dir);
+	pol = __xfrm_policy_lookup(net, fl, family, flow_to_policy_dir(dir));
 	if (IS_ERR_OR_NULL(pol))
 		return ERR_CAST(pol);
 
@@ -1740,7 +1756,6 @@ static void xfrm_policy_queue_process(unsigned long arg)
 	struct sk_buff *skb;
 	struct sock *sk;
 	struct dst_entry *dst;
-	struct net_device *dev;
 	struct xfrm_policy *pol = (struct xfrm_policy *)arg;
 	struct xfrm_policy_queue *pq = &pol->polq;
 	struct flowi fl;
@@ -1787,7 +1802,6 @@ static void xfrm_policy_queue_process(unsigned long arg)
 		dst = xfrm_lookup(xp_net(pol), skb_dst(skb)->path,
 				  &fl, skb->sk, 0);
 		if (IS_ERR(dst)) {
-			dev_put(skb->dev);
 			kfree_skb(skb);
 			continue;
 		}
@@ -1796,9 +1810,7 @@ static void xfrm_policy_queue_process(unsigned long arg)
 		skb_dst_drop(skb);
 		skb_dst_set(skb, dst);
 
-		dev = skb->dev;
 		err = dst_output(skb);
-		dev_put(dev);
 	}
 
 	return;
@@ -1821,7 +1833,6 @@ static int xdst_queue_output(struct sk_buff *skb)
 	}
 
 	skb_dst_force(skb);
-	dev_hold(skb->dev);
 
 	spin_lock_bh(&pq->hold_queue.lock);
 
@@ -1932,7 +1943,8 @@ xfrm_bundle_lookup(struct net *net, const struct flowi *fl, u16 family, u8 dir,
 	 * previous cache entry */
 	if (xdst == NULL) {
 		num_pols = 1;
-		pols[0] = __xfrm_policy_lookup(net, fl, family, dir);
+		pols[0] = __xfrm_policy_lookup(net, fl, family,
+					       flow_to_policy_dir(dir));
 		err = xfrm_expand_policies(fl, family, pols,
 					   &num_pols, &num_xfrms);
 		if (err < 0)
@@ -2538,11 +2550,12 @@ static void __xfrm_garbage_collect(struct net *net)
 	}
 }
 
-static void xfrm_garbage_collect(struct net *net)
+void xfrm_garbage_collect(struct net *net)
 {
 	flow_cache_flush();
 	__xfrm_garbage_collect(net);
 }
+EXPORT_SYMBOL(xfrm_garbage_collect);
 
 static void xfrm_garbage_collect_deferred(struct net *net)
 {
@@ -2765,7 +2778,7 @@ static void __net_init xfrm_dst_ops_init(struct net *net)
 
 static int xfrm_dev_event(struct notifier_block *this, unsigned long event, void *ptr)
 {
-	struct net_device *dev = ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 
 	switch (event) {
 	case NETDEV_DOWN:

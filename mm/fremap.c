@@ -57,17 +57,22 @@ static int install_file_pte(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long addr, unsigned long pgoff, pgprot_t prot)
 {
 	int err = -ENOMEM;
-	pte_t *pte;
+	pte_t *pte, ptfile;
 	spinlock_t *ptl;
 
 	pte = get_locked_pte(mm, addr, &ptl);
 	if (!pte)
 		goto out;
 
-	if (!pte_none(*pte))
-		zap_pte(mm, vma, addr, pte);
+	ptfile = pgoff_to_pte(pgoff);
 
-	set_pte_at(mm, addr, pte, pgoff_to_pte(pgoff));
+	if (!pte_none(*pte)) {
+		if (pte_present(*pte) && pte_soft_dirty(*pte))
+			pte_file_mksoft_dirty(ptfile);
+		zap_pte(mm, vma, addr, pte);
+	}
+
+	set_pte_at(mm, addr, pte, ptfile);
 	/*
 	 * We don't need to run update_mmu_cache() here because the "file pte"
 	 * being installed by install_file_pte() is not a real pte - it's a
@@ -129,7 +134,7 @@ SYSCALL_DEFINE5(remap_file_pages, unsigned long, start, unsigned long, size,
 	struct vm_area_struct *vma;
 	int err = -EINVAL;
 	int has_write_lock = 0;
-	vm_flags_t vm_flags;
+	vm_flags_t vm_flags = 0;
 
 	if (prot)
 		return err;
@@ -204,10 +209,8 @@ get_write_lock:
 			unsigned long addr;
 			struct file *file = get_file(vma->vm_file);
 
-			vm_flags = vma->vm_flags;
-			if (!(flags & MAP_NONBLOCK))
-				vm_flags |= VM_POPULATE;
-			addr = mmap_region(file, start, size, vm_flags, pgoff);
+			addr = mmap_region(file, start, size,
+					vma->vm_flags, pgoff);
 			fput(file);
 			if (IS_ERR_VALUE(addr)) {
 				err = addr;
@@ -224,12 +227,6 @@ get_write_lock:
 		vma_nonlinear_insert(vma, &mapping->i_mmap_nonlinear);
 		flush_dcache_mmap_unlock(mapping);
 		mutex_unlock(&mapping->i_mmap_mutex);
-	}
-
-	if (!(flags & MAP_NONBLOCK) && !(vma->vm_flags & VM_POPULATE)) {
-		if (!has_write_lock)
-			goto get_write_lock;
-		vma->vm_flags |= VM_POPULATE;
 	}
 
 	if (vma->vm_flags & VM_LOCKED) {
@@ -254,7 +251,8 @@ get_write_lock:
 	 */
 
 out:
-	vm_flags = vma->vm_flags;
+	if (vma)
+		vm_flags = vma->vm_flags;
 	if (likely(!has_write_lock))
 		up_read(&mm->mmap_sem);
 	else

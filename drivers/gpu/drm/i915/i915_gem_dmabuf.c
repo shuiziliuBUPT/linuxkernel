@@ -62,7 +62,7 @@ static struct sg_table *i915_gem_map_dma_buf(struct dma_buf_attachment *attachme
 	src = obj->pages->sgl;
 	dst = st->sgl;
 	for (i = 0; i < obj->pages->nents; i++) {
-		sg_set_page(dst, sg_page(src), PAGE_SIZE, 0);
+		sg_set_page(dst, sg_page(src), src->length, 0);
 		dst = sg_next(dst);
 		src = sg_next(src);
 	}
@@ -85,9 +85,17 @@ static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attachment,
 				   struct sg_table *sg,
 				   enum dma_data_direction dir)
 {
+	struct drm_i915_gem_object *obj = attachment->dmabuf->priv;
+
+	mutex_lock(&obj->base.dev->struct_mutex);
+
 	dma_unmap_sg(attachment->dev, sg->sgl, sg->nents, dir);
 	sg_free_table(sg);
 	kfree(sg);
+
+	i915_gem_object_unpin_pages(obj);
+
+	mutex_unlock(&obj->base.dev->struct_mutex);
 }
 
 static void i915_gem_dmabuf_release(struct dma_buf *dma_buf)
@@ -105,7 +113,7 @@ static void *i915_gem_dmabuf_vmap(struct dma_buf *dma_buf)
 {
 	struct drm_i915_gem_object *obj = dma_buf->priv;
 	struct drm_device *dev = obj->base.dev;
-	struct scatterlist *sg;
+	struct sg_page_iter sg_iter;
 	struct page **pages;
 	int ret, i;
 
@@ -124,14 +132,15 @@ static void *i915_gem_dmabuf_vmap(struct dma_buf *dma_buf)
 
 	ret = -ENOMEM;
 
-	pages = drm_malloc_ab(obj->pages->nents, sizeof(struct page *));
+	pages = drm_malloc_ab(obj->base.size >> PAGE_SHIFT, sizeof(*pages));
 	if (pages == NULL)
 		goto error;
 
-	for_each_sg(obj->pages->sgl, sg, obj->pages->nents, i)
-		pages[i] = sg_page(sg);
+	i = 0;
+	for_each_sg_page(obj->pages->sgl, &sg_iter, obj->pages->nents, 0)
+		pages[i++] = sg_page_iter_page(&sg_iter);
 
-	obj->dma_buf_vmapping = vmap(pages, obj->pages->nents, 0, PAGE_KERNEL);
+	obj->dma_buf_vmapping = vmap(pages, i, 0, PAGE_KERNEL);
 	drm_free_large(pages);
 
 	if (!obj->dma_buf_vmapping)
@@ -271,7 +280,6 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 			 * refcount on gem itself instead of f_count of dmabuf.
 			 */
 			drm_gem_object_reference(&obj->base);
-			dma_buf_put(dma_buf);
 			return &obj->base;
 		}
 	}
@@ -280,6 +288,8 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	attach = dma_buf_attach(dma_buf, dev->dev);
 	if (IS_ERR(attach))
 		return ERR_CAST(attach);
+
+	get_dma_buf(dma_buf);
 
 	obj = i915_gem_object_alloc(dev);
 	if (obj == NULL) {
@@ -300,5 +310,7 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 
 fail_detach:
 	dma_buf_detach(dma_buf, attach);
+	dma_buf_put(dma_buf);
+
 	return ERR_PTR(ret);
 }

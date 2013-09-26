@@ -275,7 +275,7 @@ marvel_print_po7_uncrr_sym(u64 uncrr_sym, u64 valid_mask)
 static void
 marvel_print_po7_ugbge_sym(u64 ugbge_sym)
 {
-	char opcode_str[20];
+	char opcode_str[10];
 
 #define IO7__PO7_UGBGE_SYM__UPH_PKT_OFF__S	(6)
 #define IO7__PO7_UGBGE_SYM__UPH_PKT_OFF__M	(0xfffffffful)

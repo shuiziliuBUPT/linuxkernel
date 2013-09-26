@@ -34,7 +34,7 @@ struct mc_saved_data {
 	struct microcode_intel **mc_saved;
 } mc_saved_data;
 
-static enum ucode_state __cpuinit
+static enum ucode_state
 generic_load_microcode_early(struct microcode_intel **mc_saved_p,
 			     unsigned int mc_saved_count,
 			     struct ucode_cpu_info *uci)
@@ -69,7 +69,7 @@ out:
 	return state;
 }
 
-static void __cpuinit
+static void
 microcode_pointer(struct microcode_intel **mc_saved,
 		  unsigned long *mc_saved_in_initrd,
 		  unsigned long initrd_start, int mc_saved_count)
@@ -82,7 +82,7 @@ microcode_pointer(struct microcode_intel **mc_saved,
 }
 
 #ifdef CONFIG_X86_32
-static void __cpuinit
+static void
 microcode_phys(struct microcode_intel **mc_saved_tmp,
 	       struct mc_saved_data *mc_saved_data)
 {
@@ -90,18 +90,18 @@ microcode_phys(struct microcode_intel **mc_saved_tmp,
 	struct microcode_intel ***mc_saved;
 
 	mc_saved = (struct microcode_intel ***)
-		   __pa_symbol(&mc_saved_data->mc_saved);
+		   __pa_nodebug(&mc_saved_data->mc_saved);
 	for (i = 0; i < mc_saved_data->mc_saved_count; i++) {
 		struct microcode_intel *p;
 
 		p = *(struct microcode_intel **)
-			__pa(mc_saved_data->mc_saved + i);
-		mc_saved_tmp[i] = (struct microcode_intel *)__pa(p);
+			__pa_nodebug(mc_saved_data->mc_saved + i);
+		mc_saved_tmp[i] = (struct microcode_intel *)__pa_nodebug(p);
 	}
 }
 #endif
 
-static enum ucode_state __cpuinit
+static enum ucode_state
 load_microcode(struct mc_saved_data *mc_saved_data,
 	       unsigned long *mc_saved_in_initrd,
 	       unsigned long initrd_start,
@@ -375,7 +375,7 @@ do {						\
 #define native_wrmsr(msr, low, high)		\
 	native_write_msr(msr, low, high);
 
-static int __cpuinit collect_cpu_info_early(struct ucode_cpu_info *uci)
+static int collect_cpu_info_early(struct ucode_cpu_info *uci)
 {
 	unsigned int val[2];
 	u8 x86, x86_model;
@@ -487,6 +487,7 @@ static inline void show_saved_mc(void)
 #endif
 
 #if defined(CONFIG_MICROCODE_INTEL_EARLY) && defined(CONFIG_HOTPLUG_CPU)
+static DEFINE_MUTEX(x86_cpu_microcode_mutex);
 /*
  * Save this mc into mc_saved_data. So it will be loaded early when a CPU is
  * hot added or resumes.
@@ -507,7 +508,7 @@ int save_mc_for_early(u8 *mc)
 	 * Hold hotplug lock so mc_saved_data is not accessed by a CPU in
 	 * hotplug.
 	 */
-	cpu_hotplug_driver_lock();
+	mutex_lock(&x86_cpu_microcode_mutex);
 
 	mc_saved_count_init = mc_saved_data.mc_saved_count;
 	mc_saved_count = mc_saved_data.mc_saved_count;
@@ -528,7 +529,7 @@ int save_mc_for_early(u8 *mc)
 	 */
 	ret = save_microcode(&mc_saved_data, mc_saved_tmp, mc_saved_count);
 	if (ret) {
-		pr_err("Can not save microcode patch.\n");
+		pr_err("Cannot save microcode patch.\n");
 		goto out;
 	}
 
@@ -544,7 +545,7 @@ int save_mc_for_early(u8 *mc)
 	}
 
 out:
-	cpu_hotplug_driver_unlock();
+	mutex_unlock(&x86_cpu_microcode_mutex);
 
 	return ret;
 }
@@ -562,7 +563,7 @@ scan_microcode(unsigned long start, unsigned long end,
 	struct cpio_data cd;
 	long offset = 0;
 #ifdef CONFIG_X86_32
-	char *p = (char *)__pa_symbol(ucode_name);
+	char *p = (char *)__pa_nodebug(ucode_name);
 #else
 	char *p = ucode_name;
 #endif
@@ -583,7 +584,7 @@ scan_microcode(unsigned long start, unsigned long end,
 /*
  * Print ucode update info.
  */
-static void __cpuinit
+static void
 print_ucode_info(struct ucode_cpu_info *uci, unsigned int date)
 {
 	int cpu = smp_processor_id();
@@ -604,7 +605,7 @@ static int current_mc_date;
 /*
  * Print early updated ucode info after printk works. This is delayed info dump.
  */
-void __cpuinit show_ucode_info_early(void)
+void show_ucode_info_early(void)
 {
 	struct ucode_cpu_info uci;
 
@@ -620,7 +621,7 @@ void __cpuinit show_ucode_info_early(void)
  * mc_saved_data.mc_saved and delay printing microcode info in
  * show_ucode_info_early() until printk() works.
  */
-static void __cpuinit print_ucode(struct ucode_cpu_info *uci)
+static void print_ucode(struct ucode_cpu_info *uci)
 {
 	struct microcode_intel *mc_intel;
 	int *delay_ucode_info_p;
@@ -630,8 +631,8 @@ static void __cpuinit print_ucode(struct ucode_cpu_info *uci)
 	if (mc_intel == NULL)
 		return;
 
-	delay_ucode_info_p = (int *)__pa_symbol(&delay_ucode_info);
-	current_mc_date_p = (int *)__pa_symbol(&current_mc_date);
+	delay_ucode_info_p = (int *)__pa_nodebug(&delay_ucode_info);
+	current_mc_date_p = (int *)__pa_nodebug(&current_mc_date);
 
 	*delay_ucode_info_p = 1;
 	*current_mc_date_p = mc_intel->hdr.date;
@@ -642,12 +643,12 @@ static void __cpuinit print_ucode(struct ucode_cpu_info *uci)
  * Flush global tlb. We only do this in x86_64 where paging has been enabled
  * already and PGE should be enabled as well.
  */
-static inline void __cpuinit flush_tlb_early(void)
+static inline void flush_tlb_early(void)
 {
 	__native_flush_tlb_global_irq_disabled();
 }
 
-static inline void __cpuinit print_ucode(struct ucode_cpu_info *uci)
+static inline void print_ucode(struct ucode_cpu_info *uci)
 {
 	struct microcode_intel *mc_intel;
 
@@ -698,7 +699,7 @@ static int apply_microcode_early(struct mc_saved_data *mc_saved_data,
  * This function converts microcode patch offsets previously stored in
  * mc_saved_in_initrd to pointers and stores the pointers in mc_saved_data.
  */
-int __init save_microcode_in_initrd(void)
+int __init save_microcode_in_initrd_intel(void)
 {
 	unsigned int count = mc_saved_data.mc_saved_count;
 	struct microcode_intel *mc_saved[MAX_UCODE_COUNT];
@@ -710,7 +711,7 @@ int __init save_microcode_in_initrd(void)
 	microcode_pointer(mc_saved, mc_saved_in_initrd, initrd_start, count);
 	ret = save_microcode(&mc_saved_data, mc_saved, count);
 	if (ret)
-		pr_err("Can not save microcod patches from initrd");
+		pr_err("Cannot save microcode patches from initrd.\n");
 
 	show_saved_mc();
 
@@ -741,15 +742,15 @@ load_ucode_intel_bsp(void)
 #ifdef CONFIG_X86_32
 	struct boot_params *boot_params_p;
 
-	boot_params_p = (struct boot_params *)__pa_symbol(&boot_params);
+	boot_params_p = (struct boot_params *)__pa_nodebug(&boot_params);
 	ramdisk_image = boot_params_p->hdr.ramdisk_image;
 	ramdisk_size  = boot_params_p->hdr.ramdisk_size;
 	initrd_start_early = ramdisk_image;
 	initrd_end_early = initrd_start_early + ramdisk_size;
 
 	_load_ucode_intel_bsp(
-		(struct mc_saved_data *)__pa_symbol(&mc_saved_data),
-		(unsigned long *)__pa_symbol(&mc_saved_in_initrd),
+		(struct mc_saved_data *)__pa_nodebug(&mc_saved_data),
+		(unsigned long *)__pa_nodebug(&mc_saved_in_initrd),
 		initrd_start_early, initrd_end_early, &uci);
 #else
 	ramdisk_image = boot_params.hdr.ramdisk_image;
@@ -762,7 +763,7 @@ load_ucode_intel_bsp(void)
 #endif
 }
 
-void __cpuinit load_ucode_intel_ap(void)
+void load_ucode_intel_ap(void)
 {
 	struct mc_saved_data *mc_saved_data_p;
 	struct ucode_cpu_info uci;
@@ -772,10 +773,10 @@ void __cpuinit load_ucode_intel_ap(void)
 	unsigned long *initrd_start_p;
 
 	mc_saved_in_initrd_p =
-		(unsigned long *)__pa_symbol(mc_saved_in_initrd);
-	mc_saved_data_p = (struct mc_saved_data *)__pa_symbol(&mc_saved_data);
-	initrd_start_p = (unsigned long *)__pa_symbol(&initrd_start);
-	initrd_start_addr = (unsigned long)__pa_symbol(*initrd_start_p);
+		(unsigned long *)__pa_nodebug(mc_saved_in_initrd);
+	mc_saved_data_p = (struct mc_saved_data *)__pa_nodebug(&mc_saved_data);
+	initrd_start_p = (unsigned long *)__pa_nodebug(&initrd_start);
+	initrd_start_addr = (unsigned long)__pa_nodebug(*initrd_start_p);
 #else
 	mc_saved_data_p = &mc_saved_data;
 	mc_saved_in_initrd_p = mc_saved_in_initrd;

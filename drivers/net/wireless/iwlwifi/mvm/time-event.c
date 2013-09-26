@@ -22,7 +22,7 @@
  * USA
  *
  * The full GNU General Public License is included in this distribution
- * in the file called LICENSE.GPL.
+ * in the file called COPYING.
  *
  * Contact Information:
  *  Intel Linux Wireless <ilw@linux.intel.com>
@@ -76,14 +76,12 @@
 #define TU_TO_JIFFIES(_tu)	(usecs_to_jiffies((_tu) * 1024))
 #define MSEC_TO_TU(_msec)	(_msec*1000/1024)
 
-/* For ROC use a TE type which has priority high enough to be scheduled when
- * there is a concurrent BSS or GO/AP. Currently, use a TE type that has
- * priority similar to the TE priority used for action scans by the FW.
- * TODO: This needs to be changed, based on the reason for the ROC, i.e., use
- * TE_P2P_DEVICE_DISCOVERABLE for remain on channel without mgmt skb, and use
- * TE_P2P_DEVICE_ACTION_SCAN
+/*
+ * For the high priority TE use a time event type that has similar priority to
+ * the FW's action scan priority.
  */
-#define IWL_MVM_ROC_TE_TYPE TE_P2P_DEVICE_ACTION_SCAN
+#define IWL_MVM_ROC_TE_TYPE_NORMAL TE_P2P_DEVICE_DISCOVERABLE
+#define IWL_MVM_ROC_TE_TYPE_MGMT_TX TE_P2P_CLIENT_ASSOC
 
 void iwl_mvm_te_clear_data(struct iwl_mvm *mvm,
 			   struct iwl_mvm_time_event_data *te_data)
@@ -116,7 +114,7 @@ void iwl_mvm_roc_done_wk(struct work_struct *wk)
 	 * issue as it will have to complete before the next command is
 	 * executed, and a new time event means a new command.
 	 */
-	iwl_mvm_flush_tx_path(mvm, BIT(IWL_OFFCHANNEL_QUEUE), false);
+	iwl_mvm_flush_tx_path(mvm, BIT(IWL_MVM_OFFCHANNEL_QUEUE), false);
 }
 
 static void iwl_mvm_roc_finished(struct iwl_mvm *mvm)
@@ -138,6 +136,20 @@ static void iwl_mvm_roc_finished(struct iwl_mvm *mvm)
 	 * any *new* TX will be rejected.
 	 */
 	schedule_work(&mvm->roc_done_wk);
+}
+
+static bool iwl_mvm_te_check_disconnect(struct iwl_mvm *mvm,
+					struct ieee80211_vif *vif,
+					const char *errmsg)
+{
+	if (vif->type != NL80211_IFTYPE_STATION)
+		return false;
+	if (vif->bss_conf.assoc && vif->bss_conf.dtim_period)
+		return false;
+	if (errmsg)
+		IWL_ERR(mvm, "%s\n", errmsg);
+	ieee80211_connection_loss(vif);
+	return true;
 }
 
 /*
@@ -165,10 +177,15 @@ static void iwl_mvm_te_handle_notif(struct iwl_mvm *mvm,
 	 * P2P Device discoveribility, while there are other higher priority
 	 * events in the system).
 	 */
-	WARN_ONCE(!le32_to_cpu(notif->status),
-		  "Failed to schedule time event\n");
+	if (WARN_ONCE(!le32_to_cpu(notif->status),
+		      "Failed to schedule time event\n")) {
+		if (iwl_mvm_te_check_disconnect(mvm, te_data->vif, NULL)) {
+			iwl_mvm_te_clear_data(mvm, te_data);
+			return;
+		}
+	}
 
-	if (le32_to_cpu(notif->action) == TE_NOTIF_HOST_END) {
+	if (le32_to_cpu(notif->action) & TE_NOTIF_HOST_EVENT_END) {
 		IWL_DEBUG_TE(mvm,
 			     "TE ended - current time %lu, estimated end %lu\n",
 			     jiffies, te_data->end_jiffies);
@@ -182,16 +199,10 @@ static void iwl_mvm_te_handle_notif(struct iwl_mvm *mvm,
 		 * By now, we should have finished association
 		 * and know the dtim period.
 		 */
-		if (te_data->vif->type == NL80211_IFTYPE_STATION &&
-		    (!te_data->vif->bss_conf.assoc ||
-		     !te_data->vif->bss_conf.dtim_period)) {
-			IWL_ERR(mvm,
-				"No assocation and the time event is over already...\n");
-			ieee80211_connection_loss(te_data->vif);
-		}
-
+		iwl_mvm_te_check_disconnect(mvm, te_data->vif,
+			"No assocation and the time event is over already...");
 		iwl_mvm_te_clear_data(mvm, te_data);
-	} else if (le32_to_cpu(notif->action) == TE_NOTIF_HOST_START) {
+	} else if (le32_to_cpu(notif->action) & TE_NOTIF_HOST_EVENT_START) {
 		te_data->running = true;
 		te_data->end_jiffies = jiffies +
 			TU_TO_JIFFIES(te_data->duration);
@@ -370,7 +381,8 @@ void iwl_mvm_protect_session(struct iwl_mvm *mvm,
 	time_cmd.interval_reciprocal = cpu_to_le32(iwl_mvm_reciprocal(1));
 	time_cmd.duration = cpu_to_le32(duration);
 	time_cmd.repeat = cpu_to_le32(1);
-	time_cmd.notify = cpu_to_le32(TE_NOTIF_HOST_START | TE_NOTIF_HOST_END);
+	time_cmd.notify = cpu_to_le32(TE_NOTIF_HOST_EVENT_START |
+				      TE_NOTIF_HOST_EVENT_END);
 
 	iwl_mvm_time_event_send_add(mvm, vif, te_data, &time_cmd);
 }
@@ -438,7 +450,7 @@ void iwl_mvm_stop_session_protection(struct iwl_mvm *mvm,
 }
 
 int iwl_mvm_start_p2p_roc(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
-			  int duration)
+			  int duration, enum ieee80211_roc_type type)
 {
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 	struct iwl_mvm_time_event_data *te_data = &mvmvif->time_event_data;
@@ -459,27 +471,36 @@ int iwl_mvm_start_p2p_roc(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	time_cmd.action = cpu_to_le32(FW_CTXT_ACTION_ADD);
 	time_cmd.id_and_color =
 		cpu_to_le32(FW_CMD_ID_AND_COLOR(mvmvif->id, mvmvif->color));
-	time_cmd.id = cpu_to_le32(IWL_MVM_ROC_TE_TYPE);
+
+	switch (type) {
+	case IEEE80211_ROC_TYPE_NORMAL:
+		time_cmd.id = cpu_to_le32(IWL_MVM_ROC_TE_TYPE_NORMAL);
+		break;
+	case IEEE80211_ROC_TYPE_MGMT_TX:
+		time_cmd.id = cpu_to_le32(IWL_MVM_ROC_TE_TYPE_MGMT_TX);
+		break;
+	default:
+		WARN_ONCE(1, "Got an invalid ROC type\n");
+		return -EINVAL;
+	}
 
 	time_cmd.apply_time = cpu_to_le32(0);
 	time_cmd.dep_policy = cpu_to_le32(TE_INDEPENDENT);
 	time_cmd.is_present = cpu_to_le32(1);
-
 	time_cmd.interval = cpu_to_le32(1);
 
 	/*
-	 * IWL_MVM_ROC_TE_TYPE can have lower priority than other events
+	 * The P2P Device TEs can have lower priority than other events
 	 * that are being scheduled by the driver/fw, and thus it might not be
-	 * scheduled. To improve the chances of it being scheduled, allow it to
-	 * be fragmented.
-	 * In addition, for the same reasons, allow to delay the scheduling of
-	 * the time event.
+	 * scheduled. To improve the chances of it being scheduled, allow them
+	 * to be fragmented, and in addition allow them to be delayed.
 	 */
 	time_cmd.max_frags = cpu_to_le32(MSEC_TO_TU(duration)/20);
 	time_cmd.max_delay = cpu_to_le32(MSEC_TO_TU(duration/2));
 	time_cmd.duration = cpu_to_le32(MSEC_TO_TU(duration));
 	time_cmd.repeat = cpu_to_le32(1);
-	time_cmd.notify = cpu_to_le32(TE_NOTIF_HOST_START | TE_NOTIF_HOST_END);
+	time_cmd.notify = cpu_to_le32(TE_NOTIF_HOST_EVENT_START |
+				      TE_NOTIF_HOST_EVENT_END);
 
 	return iwl_mvm_time_event_send_add(mvm, vif, te_data, &time_cmd);
 }

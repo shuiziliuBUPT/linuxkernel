@@ -48,6 +48,8 @@ static LIST_HEAD(mc_devices);
  */
 static void const *edac_mc_owner;
 
+static struct bus_type mc_bus[EDAC_MAX_MCS];
+
 unsigned edac_dimm_info_location(struct dimm_info *dimm, char *buf,
 			         unsigned len)
 {
@@ -86,7 +88,7 @@ static void edac_mc_dump_dimm(struct dimm_info *dimm, int number)
 	edac_dimm_info_location(dimm, location, sizeof(location));
 
 	edac_dbg(4, "%s%i: %smapped as virtual row %d, chan %d\n",
-		 dimm->mci->mem_is_per_rank ? "rank" : "dimm",
+		 dimm->mci->csbased ? "rank" : "dimm",
 		 number, location, dimm->csrow, dimm->cschannel);
 	edac_dbg(4, "  dimm = %p\n", dimm);
 	edac_dbg(4, "  dimm->label = '%s'\n", dimm->label);
@@ -341,7 +343,7 @@ struct mem_ctl_info *edac_mc_alloc(unsigned mc_num,
 	memcpy(mci->layers, layers, sizeof(*layer) * n_layers);
 	mci->nr_csrows = tot_csrows;
 	mci->num_cschannel = tot_channels;
-	mci->mem_is_per_rank = per_rank;
+	mci->csbased = per_rank;
 
 	/*
 	 * Alocate and fill the csrow/channels structs
@@ -723,6 +725,11 @@ int edac_mc_add_mc(struct mem_ctl_info *mci)
 	int ret = -EINVAL;
 	edac_dbg(0, "\n");
 
+	if (mci->mc_idx >= EDAC_MAX_MCS) {
+		pr_warn_once("Too many memory controllers: %d\n", mci->mc_idx);
+		return -ENODEV;
+	}
+
 #ifdef CONFIG_EDAC_DEBUG
 	if (edac_debug_level >= 3)
 		edac_mc_dump_mci(mci);
@@ -761,6 +768,8 @@ int edac_mc_add_mc(struct mem_ctl_info *mci)
 
 	/* set load time so that error rate can be tracked */
 	mci->start_time = jiffies;
+
+	mci->bus = &mc_bus[mci->mc_idx];
 
 	if (edac_create_sysfs_mci_device(mci)) {
 		edac_mc_printk(mci, KERN_WARNING,
@@ -1235,7 +1244,7 @@ void edac_mc_handle_error(const enum hw_event_mc_err_type type,
 			 * incrementing the compat API counters
 			 */
 			edac_dbg(4, "%s csrows map: (%d,%d)\n",
-				 mci->mem_is_per_rank ? "rank" : "dimm",
+				 mci->csbased ? "rank" : "dimm",
 				 dimm->csrow, dimm->cschannel);
 			if (row == -1)
 				row = dimm->csrow;

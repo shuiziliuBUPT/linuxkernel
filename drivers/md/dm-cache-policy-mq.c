@@ -14,7 +14,6 @@
 #include <linux/vmalloc.h>
 
 #define DM_MSG_PREFIX "cache-policy-mq"
-#define MQ_VERSION	"1.0.0"
 
 static struct kmem_cache *mq_entry_cache;
 
@@ -960,23 +959,21 @@ out:
 	return r;
 }
 
-static void remove_mapping(struct mq_policy *mq, dm_oblock_t oblock)
+static void mq_remove_mapping(struct dm_cache_policy *p, dm_oblock_t oblock)
 {
-	struct entry *e = hash_lookup(mq, oblock);
+	struct mq_policy *mq = to_mq_policy(p);
+	struct entry *e;
+
+	mutex_lock(&mq->lock);
+
+	e = hash_lookup(mq, oblock);
 
 	BUG_ON(!e || !e->in_cache);
 
 	del(mq, e);
 	e->in_cache = false;
 	push(mq, e);
-}
 
-static void mq_remove_mapping(struct dm_cache_policy *p, dm_oblock_t oblock)
-{
-	struct mq_policy *mq = to_mq_policy(p);
-
-	mutex_lock(&mq->lock);
-	remove_mapping(mq, oblock);
 	mutex_unlock(&mq->lock);
 }
 
@@ -1133,6 +1130,7 @@ bad_cache_alloc:
 
 static struct dm_cache_policy_type mq_policy_type = {
 	.name = "mq",
+	.version = {1, 0, 0},
 	.hint_size = 4,
 	.owner = THIS_MODULE,
 	.create = mq_create
@@ -1140,6 +1138,7 @@ static struct dm_cache_policy_type mq_policy_type = {
 
 static struct dm_cache_policy_type default_policy_type = {
 	.name = "default",
+	.version = {1, 0, 0},
 	.hint_size = 4,
 	.owner = THIS_MODULE,
 	.create = mq_create
@@ -1164,7 +1163,10 @@ static int __init mq_init(void)
 
 	r = dm_cache_policy_register(&default_policy_type);
 	if (!r) {
-		DMINFO("version " MQ_VERSION " loaded");
+		DMINFO("version %u.%u.%u loaded",
+		       mq_policy_type.version[0],
+		       mq_policy_type.version[1],
+		       mq_policy_type.version[2]);
 		return 0;
 	}
 

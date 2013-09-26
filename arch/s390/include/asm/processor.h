@@ -91,7 +91,15 @@ struct thread_struct {
 #endif
 };
 
-#define PER_FLAG_NO_TE		1UL	/* Flag to disable transactions. */
+/* Flag to disable transactions. */
+#define PER_FLAG_NO_TE			1UL
+/* Flag to enable random transaction aborts. */
+#define PER_FLAG_TE_ABORT_RAND		2UL
+/* Flag to specify random transaction abort mode:
+ * - abort each transaction at a random instruction before TEND if set.
+ * - abort random transactions at a random instruction if cleared.
+ */
+#define PER_FLAG_TE_ABORT_RAND_TEND	4UL
 
 typedef struct thread_struct thread_struct;
 
@@ -161,7 +169,8 @@ extern unsigned long thread_saved_pc(struct task_struct *t);
 
 extern void show_code(struct pt_regs *regs);
 extern void print_fn_code(unsigned char *code, unsigned long len);
-extern int insn_to_mnemonic(unsigned char *instruction, char buf[8]);
+extern int insn_to_mnemonic(unsigned char *instruction, char *buf,
+			    unsigned int len);
 
 unsigned long get_wchan(struct task_struct *p);
 #define task_pt_regs(tsk) ((struct pt_regs *) \

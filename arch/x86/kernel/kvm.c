@@ -20,6 +20,7 @@
  *   Authors: Anthony Liguori <aliguori@us.ibm.com>
  */
 
+#include <linux/context_tracking.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/kvm_para.h>
@@ -43,7 +44,6 @@
 #include <asm/apicdef.h>
 #include <asm/hypervisor.h>
 #include <asm/kvm_guest.h>
-#include <asm/context_tracking.h>
 
 static int kvmapf = 1;
 
@@ -254,16 +254,18 @@ EXPORT_SYMBOL_GPL(kvm_read_and_reset_pf_reason);
 dotraplinkage void __kprobes
 do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 {
+	enum ctx_state prev_state;
+
 	switch (kvm_read_and_reset_pf_reason()) {
 	default:
 		do_page_fault(regs, error_code);
 		break;
 	case KVM_PV_REASON_PAGE_NOT_PRESENT:
 		/* page is swapped out by the host. */
-		exception_enter(regs);
+		prev_state = exception_enter();
 		exit_idle();
 		kvm_async_pf_task_wait((u32)read_cr2());
-		exception_exit(regs);
+		exception_exit(prev_state);
 		break;
 	case KVM_PV_REASON_PAGE_READY:
 		rcu_irq_enter();
@@ -318,7 +320,7 @@ static void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 	apic_write(APIC_EOI, APIC_EOI_ACK);
 }
 
-void __cpuinit kvm_guest_cpu_init(void)
+void kvm_guest_cpu_init(void)
 {
 	if (!kvm_para_available())
 		return;
@@ -419,7 +421,7 @@ static void __init kvm_smp_prepare_boot_cpu(void)
 	native_smp_prepare_boot_cpu();
 }
 
-static void __cpuinit kvm_guest_cpu_online(void *dummy)
+static void kvm_guest_cpu_online(void *dummy)
 {
 	kvm_guest_cpu_init();
 }
@@ -433,8 +435,8 @@ static void kvm_guest_cpu_offline(void *dummy)
 	apf_task_wake_all();
 }
 
-static int __cpuinit kvm_cpu_notify(struct notifier_block *self,
-				    unsigned long action, void *hcpu)
+static int kvm_cpu_notify(struct notifier_block *self, unsigned long action,
+			  void *hcpu)
 {
 	int cpu = (unsigned long)hcpu;
 	switch (action) {
@@ -453,7 +455,7 @@ static int __cpuinit kvm_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block __cpuinitdata kvm_cpu_notifier = {
+static struct notifier_block kvm_cpu_notifier = {
         .notifier_call  = kvm_cpu_notify,
 };
 #endif
