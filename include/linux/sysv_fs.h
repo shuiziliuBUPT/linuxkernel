@@ -177,37 +177,4 @@ struct coh_super_block {
 	char		s_ilock;	/* lock during inode cache manipulation */
 	char		s_fmod;		/* super-block modified flag */
 	char		s_ronly;	/* flag whether fs is mounted read-only */
-	__fs32		s_time __packed2__; /* time of last super block update */
-	__fs32		s_tfree __packed2__; /* total number of free zones */
-	__fs16		s_tinode;	/* total number of free inodes */
-	__fs16		s_interleave_m;	/* interleave factor */
-	__fs16		s_interleave_n;
-	char		s_fname[6];	/* file system volume name */
-	char		s_fpack[6];	/* file system pack name */
-	__fs32		s_unique;	/* zero, not used */
-};
-
-/* SystemV/Coherent inode data on disk */
-struct sysv_inode {
-	__fs16 i_mode;
-	__fs16 i_nlink;
-	__fs16 i_uid;
-	__fs16 i_gid;
-	__fs32 i_size;
-	u8  i_data[3*(10+1+1+1)];
-	u8  i_gen;
-	__fs32 i_atime;	/* time of last access */
-	__fs32 i_mtime;	/* time of last modification */
-	__fs32 i_ctime;	/* time of creation */
-};
-
-/* SystemV/Coherent directory entry on disk */
-#define SYSV_NAMELEN	14	/* max size of name in struct sysv_dir_entry */
-struct sysv_dir_entry {
-	sysv_ino_t inode;
-	char name[SYSV_NAMELEN]; /* up to 14 characters, the rest are zeroes */
-};
-
-#define SYSV_DIRSIZE	sizeof(struct sysv_dir_entry)	/* size of every directory entry */
-
-#endif /* _LINUX_SYSV_FS_H */
+	__fs32		s_time __packed2__; /* time of last super 
